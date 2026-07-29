@@ -1,31 +1,31 @@
 import {
-  getConnectorStatuses,
-  pullConnectorData,
-  type ConnectorName,
-} from "../../lib/connectors";
+  sistemDurumlariniGetir,
+  sistemdenVeriCek,
+  type SistemAdi,
+} from "../../yardimcilar/belediye-sistem-baglantilari";
 
-const connectorNames: ConnectorName[] = ["AKOS", "PESLAYN", "USYS"];
+const SISTEM_ADLARI: SistemAdi[] = ["AKOS", "PESLAYN", "USYS"];
 
 export async function GET() {
-  return Response.json({ connectors: getConnectorStatuses() });
+  return Response.json({ connectors: sistemDurumlariniGetir() });
 }
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json() as { connector?: ConnectorName | "ALL" };
-    const selected = body.connector === "ALL"
-      ? connectorNames
-      : body.connector && connectorNames.includes(body.connector)
+    const body = await request.json() as { connector?: SistemAdi | "ALL" };
+    const secilenSistemler = body.connector === "ALL"
+      ? SISTEM_ADLARI
+      : body.connector && SISTEM_ADLARI.includes(body.connector)
         ? [body.connector]
         : [];
-    if (!selected.length) {
+    if (!secilenSistemler.length) {
       return Response.json({ error: "Geçerli bir veri kaynağı seçilmedi." }, { status: 400 });
     }
 
     const results = [];
-    for (const connector of selected) {
+    for (const connector of secilenSistemler) {
       try {
-        results.push(await pullConnectorData(connector));
+        results.push(await sistemdenVeriCek(connector));
       } catch (error) {
         results.push({
           connector,

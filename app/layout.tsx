@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { headers } from "next/headers";
-import "./globals.css";
+import "./genel-stiller.css";
 
 export async function generateMetadata(): Promise<Metadata> {
   const requestHeaders = await headers();
@@ -8,7 +8,7 @@ export async function generateMetadata(): Promise<Metadata> {
   const protocol = requestHeaders.get("x-forwarded-proto") ?? (host.startsWith("localhost") ? "http" : "https");
   const title = "Malatya Araç Bilgi ve Rapor Merkezi";
   const description = "Altı araç raporunu plaka temelinde tek araç dosyasında birleştiren güvenli inceleme ve raporlama sistemi.";
-  const image = `${protocol}://${host}/og-6-reports.png`;
+  const image = `${protocol}://${host}/arac-rapor-merkezi.png`;
 
   return {
     title,

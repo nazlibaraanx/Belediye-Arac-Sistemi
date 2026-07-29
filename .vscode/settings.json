@@ -3,5 +3,39 @@
     "skipFiles": [
       "<node_internals>/**"
     ]
+  },
+  "code-runner.runInTerminal": true,
+  "code-runner.executorMap": {
+    "typescript": "npx.cmd tsx"
+  },
+  "files.exclude": {
+    "**/.npm-cache": true,
+    "**/.openai": true,
+    "**/.vscode": true,
+    "**/.wrangler": true,
+    "**/node_modules": true,
+    "**/dist": true,
+    "**/build": true,
+    "**/examples": true,
+    "**/tests": true,
+    "**/worker": true,
+    "**/local-dev.log": true,
+    "**/local-dev-error.log": true,
+    "**/*.tgz": true,
+    "**/package-lock.json": true,
+    "**/pnpm-lock.yaml": true,
+    "**/pnpm-workspace.yaml": true,
+    "**/eslint.config.mjs": true,
+    "**/postcss.config.mjs": true,
+    "**/next.config.ts": true,
+    "**/vite.config.ts": true,
+    "**/drizzle.config.ts": true,
+    "**/tsconfig.json": true
+  },
+  "search.exclude": {
+    "**/.npm-cache": true,
+    "**/.wrangler": true,
+    "**/node_modules": true,
+    "**/dist": true
   }
 }

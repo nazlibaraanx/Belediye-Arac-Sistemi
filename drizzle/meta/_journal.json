@@ -6,21 +6,21 @@
       "idx": 0,
       "version": "6",
       "when": 1785155773748,
-      "tag": "0000_lyrical_talos",
+      "tag": "0000_arac_senkronizasyon_tablolari",
       "breakpoints": true
     },
     {
       "idx": 1,
       "version": "6",
       "when": 1785156807151,
-      "tag": "0001_aberrant_lady_ursula",
+      "tag": "0001_arac_aski_tarihleri",
       "breakpoints": true
     },
     {
       "idx": 2,
       "version": "6",
       "when": 1785236556201,
-      "tag": "0002_striped_chronomancer",
+      "tag": "0002_rapor_aktarim_tablolari",
       "breakpoints": true
     }
   ]

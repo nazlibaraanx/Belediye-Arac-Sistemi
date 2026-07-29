@@ -1,14 +1,14 @@
-export type ConnectorName = "AKOS" | "PESLAYN" | "USYS";
+export type SistemAdi = "AKOS" | "PESLAYN" | "USYS";
 
-export type ConnectorStatus = {
-  name: ConnectorName;
+export type SistemBaglantiDurumu = {
+  name: SistemAdi;
   configured: boolean;
   status: "Yetki bekleniyor" | "Bağlantıya hazır";
 };
 
-const connectorNames: ConnectorName[] = ["AKOS", "PESLAYN", "USYS"];
+const SISTEM_ADLARI: SistemAdi[] = ["AKOS", "PESLAYN", "USYS"];
 
-function connectorConfig(name: ConnectorName) {
+function sistemAyarlari(name: SistemAdi) {
   return {
     url: process.env[`${name}_URL`] ?? "",
     username: process.env[`${name}_USERNAME`] ?? "",
@@ -16,9 +16,9 @@ function connectorConfig(name: ConnectorName) {
   };
 }
 
-export function getConnectorStatuses(): ConnectorStatus[] {
-  return connectorNames.map((name) => {
-    const config = connectorConfig(name);
+export function sistemDurumlariniGetir(): SistemBaglantiDurumu[] {
+  return SISTEM_ADLARI.map((name) => {
+    const config = sistemAyarlari(name);
     const configured = Boolean(config.url && config.username && config.password);
     return {
       name,
@@ -28,8 +28,8 @@ export function getConnectorStatuses(): ConnectorStatus[] {
   });
 }
 
-export async function pullConnectorData(name: ConnectorName) {
-  const config = connectorConfig(name);
+export async function sistemdenVeriCek(name: SistemAdi) {
+  const config = sistemAyarlari(name);
   if (!config.url || !config.username || !config.password) {
     throw new Error(`${name} için adres ve giriş yetkisi henüz tanımlanmadı.`);
   }

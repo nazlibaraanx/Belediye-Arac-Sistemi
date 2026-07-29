@@ -2,14 +2,14 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Belediye Araç Sistemini Çalıştır",
+      "name": "Belediye Araç Sistemini Aç",
       "type": "node-terminal",
       "request": "launch",
       "command": "npm.cmd run dev",
       "cwd": "${workspaceFolder}",
       "serverReadyAction": {
-        "pattern": "Local.*3000",
-        "uriFormat": "http://localhost:3000",
+        "pattern": "Local:\\s+(https?://\\S+)",
+        "uriFormat": "%s",
         "action": "openExternally"
       }
     }
