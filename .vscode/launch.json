@@ -8,8 +8,8 @@
       "command": "npm.cmd run dev",
       "cwd": "${workspaceFolder}",
       "serverReadyAction": {
-        "pattern": "Local:\\s+(https?://\\S+)",
-        "uriFormat": "%s",
+        "pattern": "Local",
+        "uriFormat": "http://localhost:3000",
         "action": "openExternally"
       }
     }

@@ -29,6 +29,7 @@ npm.cmd run dev
 - `app/api/sistem-baglantilari`: belediye sistem bağlantıları
 - `app/ozellikler/arac-paneli`: araç yönetim ekranı ve bileşenleri
 - `app/yardimcilar/belediye-sistem-baglantilari.ts`: bağlantı yardımcıları
+- `app/yardimcilar/rapor-deposu.ts`: raporların veritabanına yazılması ve okunması
 - `app/genel-stiller.css`: uygulamanın genel görünüm kuralları
 - `veritabani/arac-veritabani-semasi.ts`: veritabanı tablo tanımları
 - `drizzle`: veritabanı migration dosyaları
@@ -36,3 +37,10 @@ npm.cmd run dev
 
 Excel, CSV, yerel veritabanı, günlük ve geçici çıktı dosyaları Git tarafından
 izlenmez.
+
+## Kod düzeni
+
+Araç paneli tek dosyada toplanmaz. Veri tipleri, rapor tanımları, Excel
+işlemleri, araç birleştirme kuralları, panel özeti ve menüler ayrı dosyalarda
+tutulur. API dosyaları yalnızca istek doğrulama ve yanıt üretme işini yapar;
+veritabanı işlemleri `rapor-deposu.ts` içinde bulunur.

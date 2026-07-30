@@ -46,6 +46,8 @@ next-env.d.ts
 
 # local logs and packaged dependencies
 /local-dev-error.log
+/yerel-sunucu.log
+/yerel-sunucu-hata.log
 *.tgz
 
 # municipal source data and local databases

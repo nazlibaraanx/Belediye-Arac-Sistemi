@@ -4,10 +4,8 @@
       "<node_internals>/**"
     ]
   },
-  "code-runner.runInTerminal": true,
-  "code-runner.executorMap": {
-    "typescript": "npx.cmd tsx"
-  },
+  "code-runner.showRunIconInEditorTitleMenu": false,
+  "code-runner.showRunCommandInEditorContextMenu": false,
   "files.exclude": {
     "**/.npm-cache": true,
     "**/.openai": true,
@@ -21,6 +19,8 @@
     "**/worker": true,
     "**/local-dev.log": true,
     "**/local-dev-error.log": true,
+    "**/yerel-sunucu.log": true,
+    "**/yerel-sunucu-hata.log": true,
     "**/*.tgz": true,
     "**/package-lock.json": true,
     "**/pnpm-lock.yaml": true,

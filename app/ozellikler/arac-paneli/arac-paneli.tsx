@@ -1,442 +1,436 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { aracKayitlariniBirlestir as createUnifiedVehicles } from "./arac-birlestirme";
-import { excelRaporuIndir as downloadExcel, raporDosyasiniOku as parseWorkbook } from "./excel-islemleri";
-import { PanelUstMenusu } from "./panel-ust-menusu";
-import { PanelYanMenusu } from "./panel-yan-menusu";
+import { sistemSatirlariniHazirla, tumVerileriBirlestir } from "./arac-birlestirme";
+import { excelRaporuIndir, raporDosyasiniOku } from "./excel-islemleri";
 import {
-  RAPOR_TANIMLARI as DATASET_DETAILS,
-  RAPOR_TURLERI as DATASETS,
-  bosRaporDurumlari as emptyState,
+  RAPOR_TANIMLARI,
+  RAPOR_TURLERI,
+  SISTEMLER,
+  bosRaporDurumlari,
+  sisteminRaporlari,
 } from "./rapor-tanimlari";
 import type {
-  AktarimOzeti as ImportSummary,
-  BirlesikArac as UnifiedVehicle,
-  GorunumTuru as ViewKey,
-  KayitSatiri as RecordRow,
-  RaporDurumu as DatasetState,
-  RaporTuru as DatasetKey,
-  SistemAdi as ConnectorName,
-  SistemDurumu as ConnectorStatus,
+  AktarimOzeti,
+  GorunumTuru,
+  KayitSatiri,
+  RaporDurumu,
+  RaporTuru,
+  SistemAdi,
 } from "./tipler";
-import {
-  gizliDegeriMaskele as maskValue,
-  gosterilecekSutunlar as chooseColumns,
-  metniNormallestir as normalize,
-  plakayiBul as getPlate,
-} from "./veri-yardimcilari";
+import { gizliDegeriMaskele, metniNormallestir } from "./veri-yardimcilari";
+
+type BaglantiDurumu = {
+  name: SistemAdi;
+  configured: boolean;
+  reportCount: number;
+  configuredReportCount: number;
+  status: string;
+};
+
+function sutunlariBul(satirlar: KayitSatiri[]) {
+  return [...new Set(satirlar.flatMap(Object.keys))];
+}
 
 export default function AracPaneli() {
-  const [datasets, setDatasets] = useState<Record<DatasetKey, DatasetState>>(emptyState);
-  const [activeView, setActiveView] = useState<ViewKey>("BIRLESIK");
-  const [query, setQuery] = useState("");
-  const [notice, setNotice] = useState("");
-  const [connectors, setConnectors] = useState<ConnectorStatus[]>([]);
-  const [pulling, setPulling] = useState(false);
-  const [datasetFilter, setDatasetFilter] = useState<DatasetKey | "TUMU">("TUMU");
-  const [riskFilter, setRiskFilter] = useState<"TUMU" | "CEZALI" | "DENETIM">("TUMU");
-  const [selectedVehicle, setSelectedVehicle] = useState<UnifiedVehicle | null>(null);
-  const [selectedRaw, setSelectedRaw] = useState<{ dataset: DatasetKey; row: RecordRow } | null>(null);
-  const inputs = useRef<Record<DatasetKey, HTMLInputElement | null>>({
-    RUHSAT_BILGILERI: null,
-    ARAC_TEKNIK: null,
-    ARAC_HAREKETLERI: null,
-    RUHSAT_TARIHCE: null,
-    PLAKA_CEZA: null,
-    DENETIM_EKSIK: null,
-  });
+  const [raporlar, setRaporlar] = useState<Record<RaporTuru, RaporDurumu>>(bosRaporDurumlari);
+  const [gorunum, setGorunum] = useState<GorunumTuru>("TUM_VERILER");
+  const [arama, setArama] = useState("");
+  const [bildirim, setBildirim] = useState("");
+  const [baglantilar, setBaglantilar] = useState<BaglantiDurumu[]>([]);
+  const [veriCekiliyor, setVeriCekiliyor] = useState<SistemAdi | "TUMU" | null>(null);
+  const [secilenSutunlar, setSecilenSutunlar] = useState<string[]>([]);
+  const [sutunPaneliAcik, setSutunPaneliAcik] = useState(false);
+  const [secilenSatir, setSecilenSatir] = useState<KayitSatiri | null>(null);
+  const dosyaGirdileri = useRef<Partial<Record<RaporTuru, HTMLInputElement | null>>>({});
 
   useEffect(() => {
     void fetch("/api/arac-raporlari")
-      .then((response) => response.json())
-      .then((result: { imports?: ImportSummary[] }) => {
-        if (!result.imports) return;
-        setDatasets((current) => {
-          const next = { ...current };
-          for (const summary of result.imports) {
-            if (DATASETS.includes(summary.source)) {
-              next[summary.source] = { ...next[summary.source], summary };
+      .then((yanit) => yanit.json())
+      .then((sonuc: { imports?: AktarimOzeti[] }) => {
+        if (!sonuc.imports) return;
+        setRaporlar((mevcut) => {
+          const yeni = { ...mevcut };
+          for (const ozet of sonuc.imports) {
+            if (RAPOR_TURLERI.includes(ozet.source)) {
+              yeni[ozet.source] = { ...yeni[ozet.source], summary: ozet };
             }
           }
-          return next;
+          return yeni;
         });
       })
-      .catch(() => undefined);
+      .catch(() => setBildirim("Kaydedilmiş rapor bilgileri okunamadı."));
     void fetch("/api/sistem-baglantilari")
-      .then((response) => response.json())
-      .then((result: { connectors?: ConnectorStatus[] }) => {
-        if (result.connectors) setConnectors(result.connectors);
-      })
+      .then((yanit) => yanit.json())
+      .then((sonuc: { connectors?: BaglantiDurumu[] }) => setBaglantilar(sonuc.connectors ?? []))
       .catch(() => undefined);
   }, []);
 
-  const loadRows = async (dataset: DatasetKey) => {
-    if (datasets[dataset].rows.length) return datasets[dataset].rows;
-    if (!datasets[dataset].summary) return [];
-    setDatasets((current) => ({
-      ...current,
-      [dataset]: { ...current[dataset], loading: true },
+  async function ozetleriYenile() {
+    const yanit = await fetch("/api/arac-raporlari");
+    const sonuc = await yanit.json() as { imports?: AktarimOzeti[] };
+    setRaporlar(() => {
+      const yeni = bosRaporDurumlari();
+      for (const ozet of sonuc.imports ?? []) {
+        if (RAPOR_TURLERI.includes(ozet.source)) yeni[ozet.source].summary = ozet;
+      }
+      return yeni;
+    });
+  }
+
+  async function sistemdenCek(sistem: SistemAdi | "TUMU") {
+    setVeriCekiliyor(sistem);
+    setBildirim(sistem === "TUMU" ? "Üç sistemden güncel veriler çekiliyor…" : `${sistem} verileri çekiliyor…`);
+    try {
+      const yanit = await fetch("/api/sistem-baglantilari", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ connector: sistem === "TUMU" ? "ALL" : sistem }),
+      });
+      const sonuc = await yanit.json() as { results?: { message: string }[]; error?: string };
+      const mesaj = sonuc.results?.map((satir) => satir.message).join(" · ");
+      if (!yanit.ok) throw new Error(mesaj || sonuc.error || "Veriler çekilemedi.");
+      await ozetleriYenile();
+      setBildirim(mesaj || "Veriler başarıyla güncellendi.");
+      setGorunum(sistem === "TUMU" ? "TUM_VERILER" : sistem);
+    } catch (hata) {
+      setBildirim(hata instanceof Error ? hata.message : "Veriler çekilemedi.");
+    } finally {
+      setVeriCekiliyor(null);
+    }
+  }
+
+  async function satirlariYukle(rapor: RaporTuru) {
+    if (raporlar[rapor].rows.length) return raporlar[rapor].rows;
+    if (!raporlar[rapor].summary) return [];
+    setRaporlar((mevcut) => ({
+      ...mevcut,
+      [rapor]: { ...mevcut[rapor], loading: true },
     }));
     try {
-      const response = await fetch(`/api/arac-raporlari?source=${dataset}`);
-      const result = await response.json() as { rows?: RecordRow[]; error?: string };
-      if (!response.ok || !result.rows) throw new Error(result.error ?? "Kayıtlar okunamadı.");
-      setDatasets((current) => ({
-        ...current,
-        [dataset]: { ...current[dataset], rows: result.rows ?? [], loading: false },
+      const yanit = await fetch(`/api/arac-raporlari?source=${rapor}`);
+      const sonuc = await yanit.json() as { rows?: KayitSatiri[]; error?: string };
+      if (!yanit.ok) throw new Error(sonuc.error ?? "Kayıtlar okunamadı.");
+      const satirlar = sonuc.rows ?? [];
+      setRaporlar((mevcut) => ({
+        ...mevcut,
+        [rapor]: { ...mevcut[rapor], rows: satirlar, loading: false },
       }));
-      return result.rows;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Kayıtlar okunamadı.";
-      setDatasets((current) => ({
-        ...current,
-        [dataset]: { ...current[dataset], loading: false, error: message },
+      return satirlar;
+    } catch (hata) {
+      const mesaj = hata instanceof Error ? hata.message : "Kayıtlar okunamadı.";
+      setRaporlar((mevcut) => ({
+        ...mevcut,
+        [rapor]: { ...mevcut[rapor], loading: false, error: mesaj },
       }));
       return [];
     }
-  };
+  }
 
-  const unifiedVehicles = useMemo(() => {
-    return createUnifiedVehicles(Object.fromEntries(
-      DATASETS.map((dataset) => [dataset, datasets[dataset].rows]),
-    ) as Record<DatasetKey, RecordRow[]>);
-  }, [datasets]);
+  async function gorunumuAc(yeniGorunum: GorunumTuru) {
+    const gerekliRaporlar = yeniGorunum === "TUM_VERILER"
+      ? RAPOR_TURLERI
+      : sisteminRaporlari(yeniGorunum);
+    await Promise.all(gerekliRaporlar.map(satirlariYukle));
+    setGorunum(yeniGorunum);
+    setArama("");
+    setSecilenSutunlar([]);
+  }
 
-  const filteredVehicles = useMemo(() => {
-    const q = normalize(query);
-    return unifiedVehicles.filter((vehicle) => {
-      const matchesQuery = !q || [vehicle.plate, vehicle.owner, vehicle.brandModel, vehicle.route]
-        .some((value) => normalize(value).includes(q));
-      const matchesDataset = datasetFilter === "TUMU" || vehicle.datasets.includes(datasetFilter);
-      const matchesRisk = riskFilter === "TUMU"
-        || (riskFilter === "CEZALI" && vehicle.penaltyCount > 0)
-        || (riskFilter === "DENETIM" && vehicle.inspectionMissing);
-      return matchesQuery && matchesDataset && matchesRisk;
-    });
-  }, [datasetFilter, query, riskFilter, unifiedVehicles]);
-
-  const activeRows = activeView === "BIRLESIK" ? [] : datasets[activeView].rows;
-  const activeColumns = activeView === "BIRLESIK" ? [] : chooseColumns(datasets[activeView].summary);
-  const filteredRaw = useMemo(() => {
-    if (activeView === "BIRLESIK") return [];
-    const q = normalize(query);
-    if (!q) return activeRows;
-    return activeRows.filter((row) =>
-      Object.values(row).some((value) => normalize(value).includes(q)),
-    );
-  }, [activeRows, activeView, query]);
-
-  const connectedCount = DATASETS.filter((dataset) => datasets[dataset].summary).length;
-  const totalRows = DATASETS.reduce((sum, dataset) => sum + (datasets[dataset].summary?.rowCount ?? 0), 0);
-  const penaltyTotal = datasets.PLAKA_CEZA.summary?.rowCount ?? 0;
-  const inspectionTotal = datasets.DENETIM_EKSIK.summary?.rowCount ?? 0;
-
-  const upload = async (dataset: DatasetKey, file?: File) => {
-    if (!file) return;
-    setDatasets((current) => ({
-      ...current,
-      [dataset]: { ...current[dataset], loading: true, error: undefined },
+  async function dosyaYukle(rapor: RaporTuru, dosya?: File) {
+    if (!dosya) return;
+    const tanim = RAPOR_TANIMLARI[rapor];
+    setRaporlar((mevcut) => ({
+      ...mevcut,
+      [rapor]: { ...mevcut[rapor], loading: true, error: undefined },
     }));
-    setNotice(`${DATASET_DETAILS[dataset].label} okunuyor…`);
+    setBildirim(`${tanim.baslik} okunuyor…`);
     try {
-      if (!DATASET_DETAILS[dataset].expectedFile.test(file.name)) {
-        setNotice(`Dosya adı beklenen raporla farklı; sütun yapısı kontrol ediliyor…`);
+      if (!tanim.beklenenDosya.test(dosya.name)) {
+        throw new Error(`Bu alan için yanlış dosya seçildi. Beklenen rapor: ${tanim.baslik}.`);
       }
-      const parsed = await parseWorkbook(file);
-      const response = await fetch("/api/arac-raporlari", {
+      const okunan = await raporDosyasiniOku(dosya);
+      const yanit = await fetch("/api/arac-raporlari", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          source: dataset,
-          fileName: file.name,
-          columns: parsed.columns,
-          rows: parsed.rows,
+          source: rapor,
+          fileName: dosya.name,
+          columns: okunan.columns,
+          rows: okunan.rows,
         }),
       });
-      const result = await response.json() as { summary?: ImportSummary; error?: string };
-      if (!response.ok || !result.summary) throw new Error(result.error ?? "Dosya kaydedilemedi.");
-      setDatasets((current) => ({
-        ...current,
-        [dataset]: { rows: parsed.rows, summary: result.summary, loading: false },
+      const sonuc = await yanit.json() as { summary?: AktarimOzeti; error?: string };
+      if (!yanit.ok || !sonuc.summary) {
+        throw new Error(sonuc.error ?? "Dosya kaydedilemedi.");
+      }
+      setRaporlar((mevcut) => ({
+        ...mevcut,
+        [rapor]: { summary: sonuc.summary, rows: okunan.rows, loading: false },
       }));
-      setActiveView(dataset);
-      setNotice(`${DATASET_DETAILS[dataset].label}: ${parsed.rows.length.toLocaleString("tr-TR")} satır başarıyla aktarıldı.`);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Dosya işlenemedi.";
-      setDatasets((current) => ({
-        ...current,
-        [dataset]: { ...current[dataset], loading: false, error: message },
+      setGorunum(tanim.sistem);
+      setSecilenSutunlar([]);
+      setBildirim(`${tanim.baslik}: ${okunan.rows.length.toLocaleString("tr-TR")} kayıt yüklendi.`);
+    } catch (hata) {
+      const mesaj = hata instanceof Error ? hata.message : "Dosya işlenemedi.";
+      setRaporlar((mevcut) => ({
+        ...mevcut,
+        [rapor]: { ...mevcut[rapor], loading: false, error: mesaj },
       }));
-      setNotice(message);
+      setBildirim(mesaj);
     }
-  };
+  }
 
-  const openView = async (view: ViewKey) => {
-    if (view === "BIRLESIK") await Promise.all(DATASETS.map(loadRows));
-    else await loadRows(view);
-    setActiveView(view);
-  };
+  const hamRaporlar = useMemo(() => {
+    return Object.fromEntries(
+      RAPOR_TURLERI.map((rapor) => [rapor, raporlar[rapor].rows]),
+    ) as Record<RaporTuru, KayitSatiri[]>;
+  }, [raporlar]);
 
-  const exportDataset = async (dataset: DatasetKey) => {
-    const rows = await loadRows(dataset);
-    await downloadExcel(
-      rows.map((row) => ({ "Rapor Türü": DATASET_DETAILS[dataset].label, ...row })),
-      `${DATASET_DETAILS[dataset].short.toLocaleLowerCase("tr-TR")}-raporu.xlsx`,
-      DATASET_DETAILS[dataset].short,
+  const gorunenSatirlar = useMemo(
+    () => gorunum === "TUM_VERILER"
+      ? tumVerileriBirlestir(hamRaporlar)
+      : sistemSatirlariniHazirla(gorunum, hamRaporlar),
+    [gorunum, hamRaporlar],
+  );
+
+  const tumSutunlar = useMemo(() => sutunlariBul(gorunenSatirlar), [gorunenSatirlar]);
+  const etkinSutunlar = secilenSutunlar.length ? secilenSutunlar : tumSutunlar;
+  const filtrelenmisSatirlar = useMemo(() => {
+    const aranan = metniNormallestir(arama);
+    if (!aranan) return gorunenSatirlar;
+    return gorunenSatirlar.filter((satir) =>
+      Object.values(satir).some((deger) => metniNormallestir(deger).includes(aranan)),
     );
-  };
+  }, [arama, gorunenSatirlar]);
 
-  const exportUnified = async () => {
-    const loaded = await Promise.all(DATASETS.map(loadRows));
-    const rowsByDataset = Object.fromEntries(
-      DATASETS.map((dataset, index) => [dataset, loaded[index]]),
-    ) as Record<DatasetKey, RecordRow[]>;
-    const vehicles = createUnifiedVehicles(rowsByDataset);
-    const rows = vehicles.map((vehicle) => ({
-        Plaka: vehicle.plate,
-        "Adı Soyadı / İşletmeci": vehicle.owner,
-        "Marka Model": vehicle.brandModel,
-        "Hat / Güzergâh": vehicle.route,
-        Durum: vehicle.status,
-        "Ceza Sayısı": String(vehicle.penaltyCount),
-        "Hareket Sayısı": String(vehicle.activityCount),
-        "Denetim Bekliyor": vehicle.inspectionMissing ? "Evet" : "Hayır",
-        "Bulunduğu Raporlar": vehicle.datasets.map((item) => DATASET_DETAILS[item].label).join(", "),
-    }));
-    await downloadExcel(
-      rows,
-      `birlesik-arac-dosyalari-${new Date().toISOString().slice(0, 10)}.xlsx`,
-      "Birleşik Araçlar",
+  const yukluRaporSayisi = RAPOR_TURLERI.filter((rapor) => raporlar[rapor].summary).length;
+  const toplamKayit = RAPOR_TURLERI.reduce(
+    (toplam, rapor) => toplam + (raporlar[rapor].summary?.rowCount ?? 0),
+    0,
+  );
+
+  async function seciliVerileriIndir() {
+    const raporSatirlari = filtrelenmisSatirlar.map((satir) =>
+      Object.fromEntries(etkinSutunlar.map((sutun) => [sutun, satir[sutun] ?? ""])),
     );
-  };
-
-  const pullData = async (connector: ConnectorName | "ALL") => {
-    setPulling(true);
-    setNotice(connector === "ALL" ? "Tüm sistem bağlantıları kontrol ediliyor…" : `${connector} bağlantısı kontrol ediliyor…`);
-    try {
-      const response = await fetch("/api/sistem-baglantilari", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ connector }),
-      });
-      const result = await response.json() as {
-        results?: { connector: ConnectorName; message: string }[];
-        error?: string;
-      };
-      const messages = result.results?.map((item) => item.message).join(" · ");
-      setNotice(messages || result.error || "Bağlantı kontrolü tamamlandı.");
-    } catch {
-      setNotice("Bağlantı kontrolü yapılamadı.");
-    } finally {
-      setPulling(false);
-    }
-  };
+    await excelRaporuIndir(
+      raporSatirlari,
+      `${gorunum.toLocaleLowerCase("tr-TR")}-secili-veriler.xlsx`,
+      gorunum === "TUM_VERILER" ? "Tüm Veriler" : gorunum,
+    );
+  }
 
   return (
-    <main className="app-shell">
-      <PanelYanMenusu
-        vehicleCount={unifiedVehicles.length}
-        connectedReportCount={connectedCount}
-        alertCount={penaltyTotal + inspectionTotal}
-      />
+    <main className="uygulama">
+      <header className="ana-baslik">
+        <div>
+          <span>BELEDİYE ARAÇ BİLGİ SİSTEMİ</span>
+          <h1>Üç sistem, tek düzenli araç tablosu</h1>
+          <p>AKOS, Peslayn ve USYS Excel raporlarını ayrı ayrı inceleyin veya plaka üzerinden birleştirin.</p>
+        </div>
+        <div className="baslik-ozeti">
+          <strong>{yukluRaporSayisi}<small>/7 rapor</small></strong>
+          <span>{toplamKayit.toLocaleString("tr-TR")} kaynak kaydı</span>
+        </div>
+      </header>
 
-      <section className="content">
-        <PanelUstMenusu
-          pulling={pulling}
-          canExport={Boolean(connectedCount)}
-          onPullAll={() => void pullData("ALL")}
-          onExport={() => void exportUnified()}
-        />
-
-        <section className="intro">
-          <div>
-            <span className="eyebrow">6 RAPOR · TEK ARAÇ DOSYASI</span>
-            <h2>Bir plakaya ait bütün bilgileri tek ekranda anlayın.</h2>
-            <p>Ruhsat, teknik araç, hareket, tarihçe, ceza ve denetim raporlarını plaka üzerinden bir araya getirir; her raporu ayrıca incelemenize de izin verir.</p>
-          </div>
-          <div className="overview">
-            <article><span>Yüklü rapor</span><strong>{connectedCount}<small>/6</small></strong></article>
-            <article><span>Toplam satır</span><strong>{totalRows.toLocaleString("tr-TR")}</strong></article>
-            <article><span>Tekil araç</span><strong>{unifiedVehicles.length.toLocaleString("tr-TR")}</strong></article>
-          </div>
-        </section>
-
-        <section className="connector-strip">
-          <div className="connector-copy">
-            <span className="eyebrow">CANLI VERİ BAĞLANTILARI</span>
-            <strong>Yetki geldiğinde tek tuşla üç sistemi güncelleyin.</strong>
-          </div>
-          {(["AKOS", "PESLAYN", "USYS"] as ConnectorName[]).map((connector) => {
-            const status = connectors.find((item) => item.name === connector);
+      <section className="baglanti-alani">
+        <div className="baglanti-basligi">
+          <div><span>OTOMATİK VERİ BAĞLANTILARI</span><h2>Sistemlerden doğrudan veri çekme</h2></div>
+          <button
+            disabled={veriCekiliyor !== null || !baglantilar.length || !baglantilar.every((baglanti) => baglanti.configured)}
+            onClick={() => void sistemdenCek("TUMU")}
+          >
+            {veriCekiliyor === "TUMU" ? "Veriler çekiliyor…" : "Tüm Verileri Güncelle"}
+          </button>
+        </div>
+        <div className="baglanti-kartlari">
+          {SISTEMLER.map((sistem) => {
+            const durum = baglantilar.find((baglanti) => baglanti.name === sistem);
             return (
-              <article key={connector}>
-                <span className={status?.configured ? "connection-dot ready" : "connection-dot"} />
-                <div><strong>{connector}</strong><small>{status?.status ?? "Kontrol ediliyor"}</small></div>
-                <button onClick={() => void pullData(connector)} disabled={pulling}>Veriyi Çek</button>
+              <article key={sistem}>
+                <div><strong>{sistem === "PESLAYN" ? "Peslayn" : sistem}</strong><span>{durum?.status ?? "Kontrol ediliyor…"}</span></div>
+                <small>{durum?.configuredReportCount ?? 0}/{durum?.reportCount ?? sisteminRaporlari(sistem).length} API adresi</small>
+                <button disabled={!durum?.configured || veriCekiliyor !== null} onClick={() => void sistemdenCek(sistem)}>
+                  {veriCekiliyor === sistem ? "Çekiliyor…" : durum?.configured ? "Şimdi Güncelle" : "API Bekleniyor"}
+                </button>
               </article>
             );
           })}
-        </section>
-
-        <section className="metric-row">
-          <article><span className="metric-icon">▦</span><div><small>BİRLEŞİK ARAÇ DOSYASI</small><strong>{unifiedVehicles.length.toLocaleString("tr-TR")}</strong></div></article>
-          <article><span className="metric-icon red">!</span><div><small>CEZA KAYDI</small><strong>{penaltyTotal.toLocaleString("tr-TR")}</strong></div></article>
-          <article><span className="metric-icon amber">◷</span><div><small>DENETİM BEKLEYEN</small><strong>{inspectionTotal.toLocaleString("tr-TR")}</strong></div></article>
-          <article><span className="metric-icon violet">↔</span><div><small>HAREKET KAYDI</small><strong>{(datasets.ARAC_HAREKETLERI.summary?.rowCount ?? 0).toLocaleString("tr-TR")}</strong></div></article>
-        </section>
-
-        <section className="dataset-grid">
-          {DATASETS.map((dataset) => {
-            const detail = DATASET_DETAILS[dataset];
-            const state = datasets[dataset];
-            return (
-              <article className={`dataset-card ${detail.tone}`} key={dataset}>
-                <input
-                  hidden
-                  type="file"
-                  accept=".xls,.xlsx,.csv"
-                  ref={(node) => { inputs.current[dataset] = node; }}
-                  onChange={(event) => void upload(dataset, event.target.files?.[0])}
-                />
-                <div className="dataset-top">
-                  <span className="dataset-mark">{detail.short.slice(0, 1)}</span>
-                  <div><strong>{detail.label}</strong><small>{detail.description}</small></div>
-                  <span className={state.summary ? "dataset-ready" : "dataset-waiting"}>{state.summary ? "Hazır" : "Eksik"}</span>
-                </div>
-                <div className="dataset-info">
-                  {state.summary ? (
-                    <><strong>{state.summary.rowCount.toLocaleString("tr-TR")} satır</strong><span>{state.summary.fileName}</span></>
-                  ) : (
-                    <><strong>Dosya bekleniyor</strong><span>İlgili Excel raporunu yükleyin.</span></>
-                  )}
-                </div>
-                {state.error && <p className="source-error">{state.error}</p>}
-                <div className="source-actions">
-                  <button onClick={() => inputs.current[dataset]?.click()} disabled={state.loading}>{state.loading ? "İşleniyor…" : state.summary ? "Dosyayı Yenile" : "Excel Yükle"}</button>
-                  <button className="ghost" disabled={!state.summary} onClick={() => void openView(dataset)}>Görüntüle</button>
-                  <button className="ghost compact" disabled={!state.summary} onClick={() => void exportDataset(dataset)}>⇩</button>
-                </div>
-              </article>
-            );
-          })}
-        </section>
-
-        {notice && <div className="notice"><span>✓</span>{notice}</div>}
-
-        <section className="records-panel">
-          <div className="panel-head">
-            <div><span className="eyebrow">VERİ GEZGİNİ</span><h2>{activeView === "BIRLESIK" ? "Birleşik araç dosyaları" : DATASET_DETAILS[activeView].label}</h2></div>
-            <label className="search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Plaka, kişi, güzergâh veya herhangi bir alan ara" /></label>
-          </div>
-          <div className="view-tabs">
-            <button className={activeView === "BIRLESIK" ? "active combined" : "combined"} onClick={() => void openView("BIRLESIK")}>Birleşik <span>{unifiedVehicles.length.toLocaleString("tr-TR")}</span></button>
-            {DATASETS.map((dataset) => (
-              <button key={dataset} className={activeView === dataset ? "active" : ""} onClick={() => void openView(dataset)}>{DATASET_DETAILS[dataset].short}<span>{datasets[dataset].summary?.rowCount.toLocaleString("tr-TR") ?? 0}</span></button>
-            ))}
-          </div>
-          {activeView === "BIRLESIK" && (
-            <div className="filter-row">
-              <label>Rapor kategorisi
-                <select value={datasetFilter} onChange={(event) => setDatasetFilter(event.target.value as DatasetKey | "TUMU")}>
-                  <option value="TUMU">Tüm kategoriler</option>
-                  {DATASETS.map((dataset) => <option key={dataset} value={dataset}>{DATASET_DETAILS[dataset].label}</option>)}
-                </select>
-              </label>
-              <label>Risk durumu
-                <select value={riskFilter} onChange={(event) => setRiskFilter(event.target.value as "TUMU" | "CEZALI" | "DENETIM")}>
-                  <option value="TUMU">Tümü</option>
-                  <option value="CEZALI">Ceza kaydı bulunanlar</option>
-                  <option value="DENETIM">Denetim bekleyenler</option>
-                </select>
-              </label>
-              <button onClick={() => { setDatasetFilter("TUMU"); setRiskFilter("TUMU"); setQuery(""); }}>Filtreleri Temizle</button>
-            </div>
-          )}
-
-          <div className="table-wrap">
-            {activeView === "BIRLESIK" ? (
-              <table>
-                <thead><tr><th>PLAKA</th><th>KİŞİ / İŞLETMECİ</th><th>ARAÇ</th><th>HAT / GÜZERGÂH</th><th>DURUM</th><th>CEZA</th><th>DENETİM</th><th>RAPORLAR</th><th /></tr></thead>
-                <tbody>
-                  {filteredVehicles.slice(0, 300).map((vehicle) => (
-                    <tr key={vehicle.plate} onClick={() => setSelectedVehicle(vehicle)}>
-                      <td><strong className="plate">{vehicle.plate}</strong></td>
-                      <td><strong>{vehicle.owner || "—"}</strong></td>
-                      <td>{vehicle.brandModel || "—"}</td>
-                      <td>{vehicle.route || "—"}</td>
-                      <td><span className={`status ${normalize(vehicle.status).includes("aktif") ? "active" : "passive"}`}>{vehicle.status || "Belirsiz"}</span></td>
-                      <td><span className={vehicle.penaltyCount ? "count danger" : "count"}>{vehicle.penaltyCount}</span></td>
-                      <td>{vehicle.inspectionMissing ? <span className="warning-pill">Bekliyor</span> : <span className="ok-pill">Kayıt yok</span>}</td>
-                      <td><div className="report-dots">{vehicle.datasets.map((dataset) => <span key={dataset} title={DATASET_DETAILS[dataset].label}>{DATASET_DETAILS[dataset].short.slice(0, 1)}</span>)}</div></td>
-                      <td><button className="detail-button">›</button></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            ) : (
-              <table>
-                <thead><tr>{activeColumns.map((column) => <th key={column}>{column.toLocaleUpperCase("tr-TR")}</th>)}<th /></tr></thead>
-                <tbody>
-                  {filteredRaw.slice(0, 300).map((row, index) => (
-                    <tr key={`${getPlate(row)}-${index}`} onClick={() => setSelectedRaw({ dataset: activeView, row })}>
-                      {activeColumns.map((column) => (
-                        <td key={column}>{normalize(column).includes("plaka") ? <strong className="plate">{row[column] || "—"}</strong> : maskValue(column, row[column] ?? "")}</td>
-                      ))}
-                      <td><button className="detail-button">›</button></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-            {((activeView === "BIRLESIK" && !filteredVehicles.length) || (activeView !== "BIRLESIK" && !filteredRaw.length)) && (
-              <div className="empty-state"><span>▦</span><strong>Bu görünümde kayıt yok</strong><p>Yukarıdan ilgili Excel raporunu yükleyerek başlayın.</p></div>
-            )}
-          </div>
-          <footer className="panel-footer">
-            <span>{(activeView === "BIRLESIK" ? filteredVehicles.length : filteredRaw.length).toLocaleString("tr-TR")} sonuç</span>
-            <small>İlk 300 satır gösterilir; indirilen rapora bütün satırlar dahil edilir.</small>
-          </footer>
-        </section>
+        </div>
+        <p className="baglanti-notu">API adresleri geldiğinde güvenli sunucu ayarlarına eklenecek. Bundan sonra Excel yüklemeden bu düğmelerle güncelleme yapılacak.</p>
       </section>
 
-      {(selectedVehicle || selectedRaw) && (
-        <div className="drawer-backdrop" onClick={() => { setSelectedVehicle(null); setSelectedRaw(null); }}>
-          <aside className="drawer wide" onClick={(event) => event.stopPropagation()}>
-            <button className="close" onClick={() => { setSelectedVehicle(null); setSelectedRaw(null); }}>×</button>
-            {selectedVehicle ? (
-              <>
-                <span className="eyebrow">BİRLEŞİK ARAÇ DOSYASI</span>
-                <h2>{selectedVehicle.plate}</h2>
-                <div className="vehicle-summary">
-                  <span>{selectedVehicle.datasets.length} raporda bulundu</span>
-                  <span>{selectedVehicle.penaltyCount} ceza kaydı</span>
-                  <span>{selectedVehicle.activityCount} hareket</span>
-                </div>
-                {selectedVehicle.datasets.map((dataset) => {
-                  const records = selectedVehicle.records.filter((record) => record.dataset === dataset);
-                  return (
-                    <section className="detail-section" key={dataset}>
-                      <h3>{DATASET_DETAILS[dataset].label}<span>{records.length} kayıt</span></h3>
-                      {records.slice(0, 10).map(({ row }, recordIndex) => (
-                        <dl key={recordIndex}>
-                          {Object.entries(row).map(([label, value]) => (
-                            <div key={label}><dt>{label}</dt><dd>{maskValue(label, value)}</dd></div>
-                          ))}
-                        </dl>
-                      ))}
-                      {records.length > 10 && <p className="more-note">Bu bölümde {records.length - 10} kayıt daha var; tamamı indirilen rapora dahildir.</p>}
-                    </section>
-                  );
-                })}
-              </>
-            ) : selectedRaw ? (
-              <>
-                <span className="eyebrow">{DATASET_DETAILS[selectedRaw.dataset].label.toLocaleUpperCase("tr-TR")}</span>
-                <h2>{getPlate(selectedRaw.row) || "Kayıt detayı"}</h2>
-                <dl>{Object.entries(selectedRaw.row).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{maskValue(label, value)}</dd></div>)}</dl>
-              </>
-            ) : null}
+      <nav className="sistem-sekmeleri" aria-label="Veri görünümleri">
+        <button
+          className={gorunum === "TUM_VERILER" ? "aktif" : ""}
+          onClick={() => void gorunumuAc("TUM_VERILER")}
+        >
+          <b>Tüm Veriler</b><span>Plakaya göre birleşik tablo</span>
+        </button>
+        {SISTEMLER.map((sistem) => {
+          const sistemRaporlari = sisteminRaporlari(sistem);
+          const hazir = sistemRaporlari.filter((rapor) => raporlar[rapor].summary).length;
+          return (
+            <button
+              key={sistem}
+              className={gorunum === sistem ? "aktif" : ""}
+              onClick={() => void gorunumuAc(sistem)}
+            >
+              <b>{sistem === "PESLAYN" ? "Peslayn" : sistem}</b>
+              <span>{hazir}/{sistemRaporlari.length} rapor yüklü</span>
+            </button>
+          );
+        })}
+      </nav>
+
+      {gorunum !== "TUM_VERILER" && (
+        <section className="yukleme-alani">
+          <div className="bolum-basligi">
+            <div><span>YEDEK YÖNTEM · {gorunum}</span><h2>Gerekirse Excel dosyasıyla aktarım</h2></div>
+            <p>API bağlantısı yokken veya geçici bir dosyayı incelemek için kullanılır.</p>
+          </div>
+          <div className="rapor-kartlari">
+            {sisteminRaporlari(gorunum).map((rapor) => {
+              const tanim = RAPOR_TANIMLARI[rapor];
+              const durum = raporlar[rapor];
+              return (
+                <article className="rapor-karti" key={rapor}>
+                  <input
+                    hidden
+                    type="file"
+                    accept=".xls,.xlsx,.csv"
+                    ref={(eleman) => { dosyaGirdileri.current[rapor] = eleman; }}
+                    onChange={(olay) => void dosyaYukle(rapor, olay.target.files?.[0])}
+                  />
+                  <div className="kart-durum">
+                    <span className={durum.summary ? "hazir" : "eksik"}>
+                      {durum.summary ? "Yüklendi" : "Dosya bekleniyor"}
+                    </span>
+                  </div>
+                  <h3>{tanim.baslik}</h3>
+                  <p>{tanim.aciklama}</p>
+                  {durum.summary && (
+                    <div className="dosya-bilgisi">
+                      <strong>{durum.summary.rowCount.toLocaleString("tr-TR")} satır</strong>
+                      <span>{durum.summary.fileName}</span>
+                    </div>
+                  )}
+                  {durum.error && <small className="hata">{durum.error}</small>}
+                  <button
+                    className="yukle-dugmesi"
+                    disabled={durum.loading}
+                    onClick={() => dosyaGirdileri.current[rapor]?.click()}
+                  >
+                    {durum.loading ? "İşleniyor…" : durum.summary ? "Dosyayı Yenile" : "Excel Dosyasını Yükle"}
+                  </button>
+                </article>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      {bildirim && <div className="bildirim">{bildirim}</div>}
+
+      <section className="veri-alani">
+        <div className="veri-araclari">
+          <div>
+            <span>VERİ TABLOSU</span>
+            <h2>{gorunum === "TUM_VERILER" ? "Tüm sistemlerin birleşik verileri" : `${gorunum === "PESLAYN" ? "Peslayn" : gorunum} verileri`}</h2>
+          </div>
+          <div className="arac-dugmeleri">
+            <input
+              value={arama}
+              onChange={(olay) => setArama(olay.target.value)}
+              placeholder="Plaka veya herhangi bir bilgi ara"
+            />
+            <button onClick={() => setSutunPaneliAcik((acik) => !acik)}>
+              Sütun Seç <b>{etkinSutunlar.length}</b>
+            </button>
+            <button
+              className="indir"
+              disabled={!filtrelenmisSatirlar.length}
+              onClick={() => void seciliVerileriIndir()}
+            >
+              Seçili Verileri İndir
+            </button>
+          </div>
+        </div>
+
+        {sutunPaneliAcik && (
+          <div className="sutun-secici">
+            <div>
+              <strong>Tabloda görmek istediğiniz alanları seçin</strong>
+              <button onClick={() => setSecilenSutunlar([])}>Tümünü Göster</button>
+            </div>
+            <div className="sutun-listesi">
+              {tumSutunlar.map((sutun) => {
+                const secili = !secilenSutunlar.length || secilenSutunlar.includes(sutun);
+                return (
+                  <label key={sutun}>
+                    <input
+                      type="checkbox"
+                      checked={secili}
+                      onChange={() => {
+                        const temel = secilenSutunlar.length ? secilenSutunlar : tumSutunlar;
+                        setSecilenSutunlar(
+                          secili ? temel.filter((alan) => alan !== sutun) : [...temel, sutun],
+                        );
+                      }}
+                    />
+                    {sutun}
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        <div className="tablo-kapsayici">
+          <table>
+            <thead>
+              <tr>{etkinSutunlar.map((sutun) => <th key={sutun}>{sutun}</th>)}</tr>
+            </thead>
+            <tbody>
+              {filtrelenmisSatirlar.slice(0, 500).map((satir, sira) => (
+                <tr key={`${satir.Plaka ?? satir["Plaka Numarasi"] ?? "satir"}-${sira}`} onClick={() => setSecilenSatir(satir)}>
+                  {etkinSutunlar.map((sutun) => (
+                    <td key={sutun}>
+                      {metniNormallestir(sutun).includes("plaka")
+                        ? <strong className="plaka">{satir[sutun] || "—"}</strong>
+                        : gizliDegeriMaskele(sutun, satir[sutun] ?? "") || "—"}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {!filtrelenmisSatirlar.length && (
+            <div className="bos-tablo">
+              <strong>Henüz gösterilecek veri yok</strong>
+              <p>Önce AKOS, Peslayn veya USYS sekmesine geçip Excel raporlarını yükleyin.</p>
+            </div>
+          )}
+        </div>
+        <footer>
+          <span>{filtrelenmisSatirlar.length.toLocaleString("tr-TR")} sonuç</span>
+          <small>Ekranda ilk 500 satır gösterilir; Excel indirmesine filtrelenmiş sonuçların tamamı eklenir.</small>
+        </footer>
+      </section>
+
+      {secilenSatir && (
+        <div className="detay-arkaplan" onClick={() => setSecilenSatir(null)}>
+          <aside className="detay-paneli" onClick={(olay) => olay.stopPropagation()}>
+            <button className="kapat" onClick={() => setSecilenSatir(null)}>×</button>
+            <span>ARAÇ KAYDI</span>
+            <h2>{secilenSatir.Plaka ?? secilenSatir["Plaka Numarasi"] ?? "Kayıt Detayı"}</h2>
+            <dl>
+              {Object.entries(secilenSatir).map(([alan, deger]) => (
+                <div key={alan}><dt>{alan}</dt><dd>{gizliDegeriMaskele(alan, deger) || "—"}</dd></div>
+              ))}
+            </dl>
           </aside>
         </div>
       )}

@@ -1,8 +1,10 @@
-import type { AktarimOzeti, KayitSatiri } from "./tipler";
+import type { KayitSatiri } from "./tipler";
 
 export function metniNormallestir(value: string) {
   return String(value ?? "")
     .toLocaleLowerCase("tr-TR")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
     .replaceAll("ı", "i")
     .replaceAll("ş", "s")
     .replaceAll("ğ", "g")
@@ -13,34 +15,30 @@ export function metniNormallestir(value: string) {
     .trim();
 }
 
-export function satirdanDeger(row: KayitSatiri, aliases: string[]) {
-  const normalizedAliases = aliases.map(metniNormallestir);
-  const key = Object.keys(row).find((candidate) =>
-    normalizedAliases.includes(metniNormallestir(candidate)),
+export function satirdanDeger(satir: KayitSatiri, olasiBasliklar: string[]) {
+  const basliklar = olasiBasliklar.map(metniNormallestir);
+  const bulunan = Object.keys(satir).find((baslik) =>
+    basliklar.includes(metniNormallestir(baslik)),
   );
-  return key ? String(row[key] ?? "") : "";
+  return bulunan ? String(satir[bulunan] ?? "") : "";
 }
 
-export function plakayiBul(row: KayitSatiri) {
-  return satirdanDeger(row, ["Plakası", "Plaka", "PLAKA", "Plaka Numarasi", "Araç Plakası"])
+export function plakayiBul(satir: KayitSatiri) {
+  return satirdanDeger(
+    satir,
+    ["Plakası", "Plaka", "PLAKA", "Plaka Numarasi", "Araç Plakası"],
+  )
     .replace(/\s+/g, "")
     .toLocaleUpperCase("tr-TR");
 }
 
-export function gizliDegeriMaskele(label: string, value: string) {
-  if (/kimlik|tckn/i.test(label)) return value ? "•••••••••••" : "—";
-  if (/telefon/i.test(label)) {
-    const digits = value.replace(/\D/g, "");
-    return digits.length >= 4 ? `${digits.slice(0, 3)} ••• •• ${digits.slice(-2)}` : value || "—";
+export function gizliDegeriMaskele(baslik: string, deger: string) {
+  if (/kimlik|tckn/i.test(baslik)) return deger ? "•••••••••••" : "—";
+  if (/telefon/i.test(baslik)) {
+    const rakamlar = deger.replace(/\D/g, "");
+    return rakamlar.length >= 4
+      ? `${rakamlar.slice(0, 3)} ••• •• ${rakamlar.slice(-2)}`
+      : deger || "—";
   }
-  return value || "—";
-}
-
-export function gosterilecekSutunlar(summary?: AktarimOzeti) {
-  if (!summary) return [];
-  const safe = summary.columns.filter((column) => !/kimlik|telefon|motor|şasi|sasi/i.test(column));
-  const plate = safe.find((column) => metniNormallestir(column).includes("plaka"));
-  return [plate, ...safe.filter((column) => column !== plate)]
-    .filter(Boolean)
-    .slice(0, 7) as string[];
+  return deger || "—";
 }

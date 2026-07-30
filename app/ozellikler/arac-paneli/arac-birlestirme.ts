@@ -1,48 +1,62 @@
-import { RAPOR_TURLERI } from "./rapor-tanimlari";
-import type { BirlesikArac, KayitSatiri, RaporTuru } from "./tipler";
-import { plakayiBul, satirdanDeger } from "./veri-yardimcilari";
+import { RAPOR_TANIMLARI, RAPOR_TURLERI } from "./rapor-tanimlari";
+import type { KayitSatiri, RaporTuru, SistemAdi } from "./tipler";
+import { plakayiBul } from "./veri-yardimcilari";
 
-export function aracKayitlariniBirlestir(
-  rowsByDataset: Record<RaporTuru, KayitSatiri[]>,
+function degerEkle(eskiDeger: string | undefined, yeniDeger: string) {
+  const temiz = yeniDeger.trim();
+  if (!temiz) return eskiDeger ?? "";
+  const degerler = (eskiDeger ?? "").split(" | ").filter(Boolean);
+  if (!degerler.includes(temiz)) degerler.push(temiz);
+  return degerler.join(" | ");
+}
+
+export function sistemSatirlariniHazirla(
+  sistem: SistemAdi,
+  raporlar: Record<RaporTuru, KayitSatiri[]>,
 ) {
-  const byPlate = new Map<string, BirlesikArac>();
+  return RAPOR_TURLERI
+    .filter((rapor) => RAPOR_TANIMLARI[rapor].sistem === sistem)
+    .flatMap((rapor) =>
+      raporlar[rapor].map((satir) => ({
+        "Rapor Türü": RAPOR_TANIMLARI[rapor].baslik,
+        ...satir,
+      })),
+    );
+}
 
-  for (const dataset of RAPOR_TURLERI) {
-    for (const row of rowsByDataset[dataset]) {
-      const plate = plakayiBul(row);
-      if (!plate) continue;
+export function tumVerileriBirlestir(raporlar: Record<RaporTuru, KayitSatiri[]>) {
+  const plakalar = new Map<string, {
+    satir: KayitSatiri;
+    sistemler: Set<SistemAdi>;
+    raporlar: Set<string>;
+  }>();
 
-      let vehicle = byPlate.get(plate);
-      if (!vehicle) {
-        vehicle = {
-          plate,
-          owner: "",
-          brandModel: "",
-          route: "",
-          status: "",
-          penaltyCount: 0,
-          activityCount: 0,
-          inspectionMissing: false,
-          datasets: [],
-          records: [],
-        };
-        byPlate.set(plate, vehicle);
+  for (const rapor of RAPOR_TURLERI) {
+    const tanim = RAPOR_TANIMLARI[rapor];
+    for (const hamSatir of raporlar[rapor]) {
+      const plaka = plakayiBul(hamSatir);
+      if (!plaka) continue;
+      const kayit = plakalar.get(plaka) ?? {
+        satir: { Plaka: plaka },
+        sistemler: new Set<SistemAdi>(),
+        raporlar: new Set<string>(),
+      };
+
+      kayit.sistemler.add(tanim.sistem);
+      kayit.raporlar.add(tanim.baslik);
+      for (const [sutun, deger] of Object.entries(hamSatir)) {
+        if (sutun.toLocaleLowerCase("tr-TR").includes("plaka")) continue;
+        const birlesikSutun = `${tanim.sistem} - ${sutun}`;
+        kayit.satir[birlesikSutun] = degerEkle(kayit.satir[birlesikSutun], deger);
       }
-
-      vehicle.records.push({ dataset, row });
-      if (!vehicle.datasets.includes(dataset)) vehicle.datasets.push(dataset);
-      vehicle.owner ||= satirdanDeger(row, ["Adı Soyadı", "İşletmeci", "Sahibi"]);
-      vehicle.brandModel ||= [
-        satirdanDeger(row, ["Marka"]),
-        satirdanDeger(row, ["Model", "Araç Modeli"]),
-      ].filter(Boolean).join(" ");
-      vehicle.route ||= satirdanDeger(row, ["Güzergah", "Güzergah Açıklaması", "Hat", "Hat Açıklaması"]);
-      vehicle.status ||= satirdanDeger(row, ["Aktif /Pasif", "Aktif/Pasif", "Durum"]);
-      if (dataset === "PLAKA_CEZA") vehicle.penaltyCount += 1;
-      if (dataset === "ARAC_HAREKETLERI") vehicle.activityCount += 1;
-      if (dataset === "DENETIM_EKSIK") vehicle.inspectionMissing = true;
+      plakalar.set(plaka, kayit);
     }
   }
 
-  return [...byPlate.values()].sort((a, b) => a.plate.localeCompare(b.plate, "tr"));
+  return [...plakalar.values()].map(({ satir, sistemler, raporlar: raporAdlari }) => ({
+    Plaka: satir.Plaka,
+    "Bulunduğu Sistemler": [...sistemler].join(", "),
+    "Bulunduğu Raporlar": [...raporAdlari].join(", "),
+    ...Object.fromEntries(Object.entries(satir).filter(([sutun]) => sutun !== "Plaka")),
+  }));
 }
