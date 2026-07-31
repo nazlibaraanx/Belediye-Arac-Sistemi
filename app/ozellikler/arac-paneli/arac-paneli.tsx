@@ -1,10 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { sistemSatirlariniHazirla, tumVerileriBirlestir } from "./arac-birlestirme";
-import { excelRaporuIndir, raporDosyasiniOku } from "./excel-islemleri";
+import { excelRaporuIndir } from "./excel-islemleri";
 import {
-  RAPOR_TANIMLARI,
   RAPOR_TURLERI,
   SISTEMLER,
   bosRaporDurumlari,
@@ -28,6 +27,12 @@ type BaglantiDurumu = {
   status: string;
 };
 
+const GORUNUM_ADLARI: Record<SistemAdi, string> = {
+  AKOS: "Ruhsat Bilgileri",
+  PESLAYN: "Araç ve Hareket Bilgileri",
+  USYS: "Ceza ve Denetim Bilgileri",
+};
+
 function sutunlariBul(satirlar: KayitSatiri[]) {
   return [...new Set(satirlar.flatMap(Object.keys))];
 }
@@ -41,8 +46,8 @@ export default function AracPaneli() {
   const [veriCekiliyor, setVeriCekiliyor] = useState<SistemAdi | "TUMU" | null>(null);
   const [secilenSutunlar, setSecilenSutunlar] = useState<string[]>([]);
   const [sutunPaneliAcik, setSutunPaneliAcik] = useState(false);
+  const [hissedarlariSatirSatirGoster, setHissedarlariSatirSatirGoster] = useState(false);
   const [secilenSatir, setSecilenSatir] = useState<KayitSatiri | null>(null);
-  const dosyaGirdileri = useRef<Partial<Record<RaporTuru, HTMLInputElement | null>>>({});
 
   useEffect(() => {
     void fetch("/api/arac-raporlari")
@@ -66,33 +71,44 @@ export default function AracPaneli() {
       .catch(() => undefined);
   }, []);
 
-  async function ozetleriYenile() {
+  async function tumKayitlariYenile() {
     const yanit = await fetch("/api/arac-raporlari");
     const sonuc = await yanit.json() as { imports?: AktarimOzeti[] };
-    setRaporlar(() => {
-      const yeni = bosRaporDurumlari();
-      for (const ozet of sonuc.imports ?? []) {
-        if (RAPOR_TURLERI.includes(ozet.source)) yeni[ozet.source].summary = ozet;
-      }
-      return yeni;
-    });
+    const ozetler = sonuc.imports ?? [];
+    const yeni = bosRaporDurumlari();
+    await Promise.all(ozetler.map(async (ozet) => {
+      if (!RAPOR_TURLERI.includes(ozet.source)) return;
+      const raporYaniti = await fetch(`/api/arac-raporlari?source=${ozet.source}`);
+      const raporSonucu = await raporYaniti.json() as { rows?: KayitSatiri[] };
+      yeni[ozet.source] = {
+        summary: ozet,
+        rows: raporSonucu.rows ?? [],
+        loading: false,
+      };
+    }));
+    setRaporlar(yeni);
+    return Object.fromEntries(
+      RAPOR_TURLERI.map((rapor) => [rapor, yeni[rapor].rows]),
+    ) as Record<RaporTuru, KayitSatiri[]>;
   }
 
-  async function sistemdenCek(sistem: SistemAdi | "TUMU") {
-    setVeriCekiliyor(sistem);
-    setBildirim(sistem === "TUMU" ? "Üç sistemden güncel veriler çekiliyor…" : `${sistem} verileri çekiliyor…`);
+  async function butunVerileriCek() {
+    setVeriCekiliyor("TUMU");
+    setBildirim("Güncel araç bilgileri getiriliyor…");
     try {
       const yanit = await fetch("/api/sistem-baglantilari", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ connector: sistem === "TUMU" ? "ALL" : sistem }),
+        body: JSON.stringify({ connector: "ALL" }),
       });
       const sonuc = await yanit.json() as { results?: { message: string }[]; error?: string };
       const mesaj = sonuc.results?.map((satir) => satir.message).join(" · ");
       if (!yanit.ok) throw new Error(mesaj || sonuc.error || "Veriler çekilemedi.");
-      await ozetleriYenile();
-      setBildirim(mesaj || "Veriler başarıyla güncellendi.");
-      setGorunum(sistem === "TUMU" ? "TUM_VERILER" : sistem);
+      await tumKayitlariYenile();
+      setGorunum("TUM_VERILER");
+      setArama("");
+      setSecilenSutunlar([]);
+      setBildirim("Bütün araç bilgileri güncellendi. Artık plaka arayabilir veya Excel oluşturabilirsiniz.");
     } catch (hata) {
       setBildirim(hata instanceof Error ? hata.message : "Veriler çekilemedi.");
     } finally {
@@ -137,50 +153,6 @@ export default function AracPaneli() {
     setSecilenSutunlar([]);
   }
 
-  async function dosyaYukle(rapor: RaporTuru, dosya?: File) {
-    if (!dosya) return;
-    const tanim = RAPOR_TANIMLARI[rapor];
-    setRaporlar((mevcut) => ({
-      ...mevcut,
-      [rapor]: { ...mevcut[rapor], loading: true, error: undefined },
-    }));
-    setBildirim(`${tanim.baslik} okunuyor…`);
-    try {
-      if (!tanim.beklenenDosya.test(dosya.name)) {
-        throw new Error(`Bu alan için yanlış dosya seçildi. Beklenen rapor: ${tanim.baslik}.`);
-      }
-      const okunan = await raporDosyasiniOku(dosya);
-      const yanit = await fetch("/api/arac-raporlari", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          source: rapor,
-          fileName: dosya.name,
-          columns: okunan.columns,
-          rows: okunan.rows,
-        }),
-      });
-      const sonuc = await yanit.json() as { summary?: AktarimOzeti; error?: string };
-      if (!yanit.ok || !sonuc.summary) {
-        throw new Error(sonuc.error ?? "Dosya kaydedilemedi.");
-      }
-      setRaporlar((mevcut) => ({
-        ...mevcut,
-        [rapor]: { summary: sonuc.summary, rows: okunan.rows, loading: false },
-      }));
-      setGorunum(tanim.sistem);
-      setSecilenSutunlar([]);
-      setBildirim(`${tanim.baslik}: ${okunan.rows.length.toLocaleString("tr-TR")} kayıt yüklendi.`);
-    } catch (hata) {
-      const mesaj = hata instanceof Error ? hata.message : "Dosya işlenemedi.";
-      setRaporlar((mevcut) => ({
-        ...mevcut,
-        [rapor]: { ...mevcut[rapor], loading: false, error: mesaj },
-      }));
-      setBildirim(mesaj);
-    }
-  }
-
   const hamRaporlar = useMemo(() => {
     return Object.fromEntries(
       RAPOR_TURLERI.map((rapor) => [rapor, raporlar[rapor].rows]),
@@ -195,7 +167,12 @@ export default function AracPaneli() {
   );
 
   const tumSutunlar = useMemo(() => sutunlariBul(gorunenSatirlar), [gorunenSatirlar]);
-  const etkinSutunlar = secilenSutunlar.length ? secilenSutunlar : tumSutunlar;
+  const temelSutunlar = useMemo(() => {
+    if (gorunum !== "TUM_VERILER") return tumSutunlar.slice(0, 9);
+    const oncelikli = ["Plaka", "Hissedar Sayısı", "Hissedarlar", "Bulunduğu Bilgi Grupları"];
+    return oncelikli.filter((sutun) => tumSutunlar.includes(sutun));
+  }, [gorunum, tumSutunlar]);
+  const etkinSutunlar = secilenSutunlar.length ? secilenSutunlar : temelSutunlar;
   const filtrelenmisSatirlar = useMemo(() => {
     const aranan = metniNormallestir(arama);
     if (!aranan) return gorunenSatirlar;
@@ -204,6 +181,31 @@ export default function AracPaneli() {
     );
   }, [arama, gorunenSatirlar]);
 
+  const tabloSatirlari = useMemo(() => {
+    if (gorunum !== "TUM_VERILER" || !hissedarlariSatirSatirGoster) {
+      return filtrelenmisSatirlar;
+    }
+    return filtrelenmisSatirlar.flatMap((satir) => {
+      const hissedarlar = (satir.Hissedarlar ?? "").split(" | ").filter(Boolean);
+      if (!hissedarlar.length) return [{ ...satir, "Kayıt Türü": "Araç", "Kişi / Hissedar": "", "Hisse Oranı": "" }];
+      return hissedarlar.map((hissedar, sira) => {
+        const [kisi, hisse = ""] = hissedar.split(" — ");
+        return {
+          ...satir,
+          "Kayıt Türü": sira === 0 ? "Araç Sahibi" : "Hissedar",
+          "Kişi / Hissedar": kisi,
+          "Hisse Oranı": hisse,
+        };
+      });
+    });
+  }, [filtrelenmisSatirlar, gorunum, hissedarlariSatirSatirGoster]);
+
+  const tabloSutunlari = useMemo(() => {
+    if (gorunum !== "TUM_VERILER" || !hissedarlariSatirSatirGoster) return etkinSutunlar;
+    const kisiSutunlari = ["Plaka", "Kayıt Türü", "Kişi / Hissedar", "Hisse Oranı"];
+    return [...kisiSutunlari, ...etkinSutunlar.filter((sutun) => !kisiSutunlari.includes(sutun) && sutun !== "Hissedarlar")];
+  }, [etkinSutunlar, gorunum, hissedarlariSatirSatirGoster]);
+
   const yukluRaporSayisi = RAPOR_TURLERI.filter((rapor) => raporlar[rapor].summary).length;
   const toplamKayit = RAPOR_TURLERI.reduce(
     (toplam, rapor) => toplam + (raporlar[rapor].summary?.rowCount ?? 0),
@@ -211,8 +213,8 @@ export default function AracPaneli() {
   );
 
   async function seciliVerileriIndir() {
-    const raporSatirlari = filtrelenmisSatirlar.map((satir) =>
-      Object.fromEntries(etkinSutunlar.map((sutun) => [sutun, satir[sutun] ?? ""])),
+    const raporSatirlari = tabloSatirlari.map((satir) =>
+      Object.fromEntries(tabloSutunlari.map((sutun) => [sutun, satir[sutun] ?? ""])),
     );
     await excelRaporuIndir(
       raporSatirlari,
@@ -226,8 +228,8 @@ export default function AracPaneli() {
       <header className="ana-baslik">
         <div>
           <span>BELEDİYE ARAÇ BİLGİ SİSTEMİ</span>
-          <h1>Üç sistem, tek düzenli araç tablosu</h1>
-          <p>AKOS, Peslayn ve USYS Excel raporlarını ayrı ayrı inceleyin veya plaka üzerinden birleştirin.</p>
+          <h1>Bütün araç bilgileri tek ekranda</h1>
+          <p>Güncel verileri tek işlemle getirin, plaka üzerinden arayın ve istediğiniz bilgileri Excel olarak alın.</p>
         </div>
         <div className="baslik-ozeti">
           <strong>{yukluRaporSayisi}<small>/7 rapor</small></strong>
@@ -235,31 +237,21 @@ export default function AracPaneli() {
         </div>
       </header>
 
-      <section className="baglanti-alani">
-        <div className="baglanti-basligi">
-          <div><span>OTOMATİK VERİ BAĞLANTILARI</span><h2>Sistemlerden doğrudan veri çekme</h2></div>
-          <button
-            disabled={veriCekiliyor !== null || !baglantilar.length || !baglantilar.every((baglanti) => baglanti.configured)}
-            onClick={() => void sistemdenCek("TUMU")}
-          >
-            {veriCekiliyor === "TUMU" ? "Veriler çekiliyor…" : "Tüm Verileri Güncelle"}
-          </button>
+      <section className="tek-islem-alani">
+        <div>
+          <span>TEK ADIMDA GÜNCELLE</span>
+          <h2>Bütün araç bilgilerini getir</h2>
+          <p>Sistem, gerekli kaynaklardan verileri arka planda toplar ve plakaya göre tek tabloda birleştirir.</p>
         </div>
-        <div className="baglanti-kartlari">
-          {SISTEMLER.map((sistem) => {
-            const durum = baglantilar.find((baglanti) => baglanti.name === sistem);
-            return (
-              <article key={sistem}>
-                <div><strong>{sistem === "PESLAYN" ? "Peslayn" : sistem}</strong><span>{durum?.status ?? "Kontrol ediliyor…"}</span></div>
-                <small>{durum?.configuredReportCount ?? 0}/{durum?.reportCount ?? sisteminRaporlari(sistem).length} API adresi</small>
-                <button disabled={!durum?.configured || veriCekiliyor !== null} onClick={() => void sistemdenCek(sistem)}>
-                  {veriCekiliyor === sistem ? "Çekiliyor…" : durum?.configured ? "Şimdi Güncelle" : "API Bekleniyor"}
-                </button>
-              </article>
-            );
-          })}
-        </div>
-        <p className="baglanti-notu">API adresleri geldiğinde güvenli sunucu ayarlarına eklenecek. Bundan sonra Excel yüklemeden bu düğmelerle güncelleme yapılacak.</p>
+        <button
+          disabled={veriCekiliyor !== null || !baglantilar.length || !baglantilar.every((baglanti) => baglanti.configured)}
+          onClick={() => void butunVerileriCek()}
+        >
+          {veriCekiliyor ? "Veriler getiriliyor…" : "Verileri Çek"}
+        </button>
+        {baglantilar.length > 0 && !baglantilar.every((baglanti) => baglanti.configured) && (
+          <small>Bağlantı bilgileri tamamlandığında bu düğme otomatik olarak açılacak.</small>
+        )}
       </section>
 
       <nav className="sistem-sekmeleri" aria-label="Veri görünümleri">
@@ -278,59 +270,12 @@ export default function AracPaneli() {
               className={gorunum === sistem ? "aktif" : ""}
               onClick={() => void gorunumuAc(sistem)}
             >
-              <b>{sistem === "PESLAYN" ? "Peslayn" : sistem}</b>
-              <span>{hazir}/{sistemRaporlari.length} rapor yüklü</span>
+              <b>{GORUNUM_ADLARI[sistem]}</b>
+              <span>{hazir === sistemRaporlari.length ? "Güncel" : "Veri bekleniyor"}</span>
             </button>
           );
         })}
       </nav>
-
-      {gorunum !== "TUM_VERILER" && (
-        <section className="yukleme-alani">
-          <div className="bolum-basligi">
-            <div><span>YEDEK YÖNTEM · {gorunum}</span><h2>Gerekirse Excel dosyasıyla aktarım</h2></div>
-            <p>API bağlantısı yokken veya geçici bir dosyayı incelemek için kullanılır.</p>
-          </div>
-          <div className="rapor-kartlari">
-            {sisteminRaporlari(gorunum).map((rapor) => {
-              const tanim = RAPOR_TANIMLARI[rapor];
-              const durum = raporlar[rapor];
-              return (
-                <article className="rapor-karti" key={rapor}>
-                  <input
-                    hidden
-                    type="file"
-                    accept=".xls,.xlsx,.csv"
-                    ref={(eleman) => { dosyaGirdileri.current[rapor] = eleman; }}
-                    onChange={(olay) => void dosyaYukle(rapor, olay.target.files?.[0])}
-                  />
-                  <div className="kart-durum">
-                    <span className={durum.summary ? "hazir" : "eksik"}>
-                      {durum.summary ? "Yüklendi" : "Dosya bekleniyor"}
-                    </span>
-                  </div>
-                  <h3>{tanim.baslik}</h3>
-                  <p>{tanim.aciklama}</p>
-                  {durum.summary && (
-                    <div className="dosya-bilgisi">
-                      <strong>{durum.summary.rowCount.toLocaleString("tr-TR")} satır</strong>
-                      <span>{durum.summary.fileName}</span>
-                    </div>
-                  )}
-                  {durum.error && <small className="hata">{durum.error}</small>}
-                  <button
-                    className="yukle-dugmesi"
-                    disabled={durum.loading}
-                    onClick={() => dosyaGirdileri.current[rapor]?.click()}
-                  >
-                    {durum.loading ? "İşleniyor…" : durum.summary ? "Dosyayı Yenile" : "Excel Dosyasını Yükle"}
-                  </button>
-                </article>
-              );
-            })}
-          </div>
-        </section>
-      )}
 
       {bildirim && <div className="bildirim">{bildirim}</div>}
 
@@ -338,7 +283,7 @@ export default function AracPaneli() {
         <div className="veri-araclari">
           <div>
             <span>VERİ TABLOSU</span>
-            <h2>{gorunum === "TUM_VERILER" ? "Tüm sistemlerin birleşik verileri" : `${gorunum === "PESLAYN" ? "Peslayn" : gorunum} verileri`}</h2>
+            <h2>{gorunum === "TUM_VERILER" ? "Tüm araç bilgileri" : GORUNUM_ADLARI[gorunum]}</h2>
           </div>
           <div className="arac-dugmeleri">
             <input
@@ -349,12 +294,20 @@ export default function AracPaneli() {
             <button onClick={() => setSutunPaneliAcik((acik) => !acik)}>
               Sütun Seç <b>{etkinSutunlar.length}</b>
             </button>
+            {gorunum === "TUM_VERILER" && (
+              <button
+                className={hissedarlariSatirSatirGoster ? "secili-filtre" : ""}
+                onClick={() => setHissedarlariSatirSatirGoster((goster) => !goster)}
+              >
+                {hissedarlariSatirSatirGoster ? "Hissedarları Gizle" : "Hissedarları Satır Satır Göster"}
+              </button>
+            )}
             <button
               className="indir"
               disabled={!filtrelenmisSatirlar.length}
               onClick={() => void seciliVerileriIndir()}
             >
-              Seçili Verileri İndir
+              Excel Oluştur
             </button>
           </div>
         </div>
@@ -363,18 +316,21 @@ export default function AracPaneli() {
           <div className="sutun-secici">
             <div>
               <strong>Tabloda görmek istediğiniz alanları seçin</strong>
-              <button onClick={() => setSecilenSutunlar([])}>Tümünü Göster</button>
+              <div className="sutun-secici-islemleri">
+                <button onClick={() => setSecilenSutunlar([])}>Temel Alanlar</button>
+                <button onClick={() => setSecilenSutunlar(tumSutunlar)}>Bütün Alanlar</button>
+              </div>
             </div>
             <div className="sutun-listesi">
               {tumSutunlar.map((sutun) => {
-                const secili = !secilenSutunlar.length || secilenSutunlar.includes(sutun);
+                const secili = etkinSutunlar.includes(sutun);
                 return (
                   <label key={sutun}>
                     <input
                       type="checkbox"
                       checked={secili}
                       onChange={() => {
-                        const temel = secilenSutunlar.length ? secilenSutunlar : tumSutunlar;
+                        const temel = secilenSutunlar.length ? secilenSutunlar : temelSutunlar;
                         setSecilenSutunlar(
                           secili ? temel.filter((alan) => alan !== sutun) : [...temel, sutun],
                         );
@@ -391,12 +347,12 @@ export default function AracPaneli() {
         <div className="tablo-kapsayici">
           <table>
             <thead>
-              <tr>{etkinSutunlar.map((sutun) => <th key={sutun}>{sutun}</th>)}</tr>
+              <tr>{tabloSutunlari.map((sutun) => <th key={sutun}>{sutun}</th>)}</tr>
             </thead>
             <tbody>
-              {filtrelenmisSatirlar.slice(0, 500).map((satir, sira) => (
+              {tabloSatirlari.slice(0, 500).map((satir, sira) => (
                 <tr key={`${satir.Plaka ?? satir["Plaka Numarasi"] ?? "satir"}-${sira}`} onClick={() => setSecilenSatir(satir)}>
-                  {etkinSutunlar.map((sutun) => (
+                  {tabloSutunlari.map((sutun) => (
                     <td key={sutun}>
                       {metniNormallestir(sutun).includes("plaka")
                         ? <strong className="plaka">{satir[sutun] || "—"}</strong>
@@ -407,7 +363,7 @@ export default function AracPaneli() {
               ))}
             </tbody>
           </table>
-          {!filtrelenmisSatirlar.length && (
+          {!tabloSatirlari.length && (
             <div className="bos-tablo">
               <strong>Henüz gösterilecek veri yok</strong>
               <p>Önce AKOS, Peslayn veya USYS sekmesine geçip Excel raporlarını yükleyin.</p>
@@ -415,7 +371,7 @@ export default function AracPaneli() {
           )}
         </div>
         <footer>
-          <span>{filtrelenmisSatirlar.length.toLocaleString("tr-TR")} sonuç</span>
+          <span>{tabloSatirlari.length.toLocaleString("tr-TR")} tablo satırı</span>
           <small>Ekranda ilk 500 satır gösterilir; Excel indirmesine filtrelenmiş sonuçların tamamı eklenir.</small>
         </footer>
       </section>
@@ -426,8 +382,20 @@ export default function AracPaneli() {
             <button className="kapat" onClick={() => setSecilenSatir(null)}>×</button>
             <span>ARAÇ KAYDI</span>
             <h2>{secilenSatir.Plaka ?? secilenSatir["Plaka Numarasi"] ?? "Kayıt Detayı"}</h2>
+            {secilenSatir.Hissedarlar && (
+              <section className="hissedar-bolumu">
+                <div><strong>Hissedarlar</strong><span>{secilenSatir["Hissedar Sayısı"]} kişi</span></div>
+                <ul>
+                  {secilenSatir.Hissedarlar.split(" | ").map((hissedar) => (
+                    <li key={hissedar}>{hissedar}</li>
+                  ))}
+                </ul>
+              </section>
+            )}
             <dl>
-              {Object.entries(secilenSatir).map(([alan, deger]) => (
+              {Object.entries(secilenSatir)
+                .filter(([alan]) => alan !== "Hissedarlar")
+                .map(([alan, deger]) => (
                 <div key={alan}><dt>{alan}</dt><dd>{gizliDegeriMaskele(alan, deger) || "—"}</dd></div>
               ))}
             </dl>

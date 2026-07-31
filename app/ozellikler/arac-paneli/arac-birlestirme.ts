@@ -1,6 +1,6 @@
 import { RAPOR_TANIMLARI, RAPOR_TURLERI } from "./rapor-tanimlari";
 import type { KayitSatiri, RaporTuru, SistemAdi } from "./tipler";
-import { plakayiBul } from "./veri-yardimcilari";
+import { plakayiBul, satirdanDeger } from "./veri-yardimcilari";
 
 function degerEkle(eskiDeger: string | undefined, yeniDeger: string) {
   const temiz = yeniDeger.trim();
@@ -29,6 +29,7 @@ export function tumVerileriBirlestir(raporlar: Record<RaporTuru, KayitSatiri[]>)
     satir: KayitSatiri;
     sistemler: Set<SistemAdi>;
     raporlar: Set<string>;
+    hissedarlar: Map<string, string>;
   }>();
 
   for (const rapor of RAPOR_TURLERI) {
@@ -40,10 +41,18 @@ export function tumVerileriBirlestir(raporlar: Record<RaporTuru, KayitSatiri[]>)
         satir: { Plaka: plaka },
         sistemler: new Set<SistemAdi>(),
         raporlar: new Set<string>(),
+        hissedarlar: new Map<string, string>(),
       };
 
       kayit.sistemler.add(tanim.sistem);
       kayit.raporlar.add(tanim.baslik);
+      if (tanim.sistem === "AKOS") {
+        const hissedar = satirdanDeger(hamSatir, ["Adı Soyadı", "İşletmeci", "Sahibi", "Firma"]);
+        const hisse = satirdanDeger(hamSatir, ["Hisse", "Hisse Oranı", "Hisse Orani"]);
+        if (hissedar && (hisse || !kayit.hissedarlar.has(hissedar))) {
+          kayit.hissedarlar.set(hissedar, hisse);
+        }
+      }
       for (const [sutun, deger] of Object.entries(hamSatir)) {
         if (sutun.toLocaleLowerCase("tr-TR").includes("plaka")) continue;
         const birlesikSutun = `${tanim.sistem} - ${sutun}`;
@@ -53,10 +62,17 @@ export function tumVerileriBirlestir(raporlar: Record<RaporTuru, KayitSatiri[]>)
     }
   }
 
-  return [...plakalar.values()].map(({ satir, sistemler, raporlar: raporAdlari }) => ({
-    Plaka: satir.Plaka,
-    "Bulunduğu Sistemler": [...sistemler].join(", "),
-    "Bulunduğu Raporlar": [...raporAdlari].join(", "),
-    ...Object.fromEntries(Object.entries(satir).filter(([sutun]) => sutun !== "Plaka")),
-  }));
+  return [...plakalar.values()].map(({ satir, sistemler, raporlar: raporAdlari, hissedarlar }) => {
+    const hissedarListesi = [...hissedarlar.entries()].map(([ad, hisse]) =>
+      hisse ? `${ad} — ${hisse}` : ad,
+    );
+    return {
+      Plaka: satir.Plaka,
+      "Hissedar Sayısı": String(hissedarListesi.length),
+      Hissedarlar: hissedarListesi.join(" | "),
+      "Bulunduğu Bilgi Grupları": [...sistemler].join(", "),
+      "Bulunduğu Raporlar": [...raporAdlari].join(", "),
+      ...Object.fromEntries(Object.entries(satir).filter(([sutun]) => sutun !== "Plaka")),
+    };
+  });
 }
